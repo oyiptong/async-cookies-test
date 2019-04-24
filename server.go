@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
@@ -19,6 +20,15 @@ const (
 	COOKIE_SECRET = "foobarwidget"
 )
 
+type serverConfig struct {
+	Port int
+	Env  string
+}
+
+var config = serverConfig{
+	Env:  "dev",
+	Port: DEFAULT_PORT,
+}
 var store = sessions.NewCookieStore([]byte(COOKIE_SECRET))
 
 func login(w http.ResponseWriter, r *http.Request) {
@@ -43,20 +53,39 @@ func changeCookie(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(fmt.Sprintf("cookie change successful. Set to %s", value)))
 }
 
-func main() {
-	port := flag.Int("port", DEFAULT_PORT, "port to listen at")
+func init() {
+	envPort := os.Getenv("PORT")
+	if envPort != "" {
+		if p, err := strconv.Atoi(envPort); err != nil && p > 0 {
+			config.Port = p
+		}
+	}
+	flagPort := flag.Int("port", DEFAULT_PORT, "port to listen at")
+	if *flagPort != DEFAULT_PORT {
+		config.Port = *flagPort
+	}
 
-	fs := http.FileServer(http.Dir(""))
+	env := os.Getenv("ENVIRONMENT")
+	if env == "production" {
+		config.Env = env
+	}
+}
+
+func main() {
 
 	r := mux.NewRouter()
 	r.HandleFunc("/login", login)
 	r.HandleFunc("/logout", logout)
 	r.HandleFunc("/changeCookie", changeCookie)
-	r.PathPrefix("/").Handler(http.StripPrefix("/", fs))
+
+	if config.Env == "dev" {
+		staticFS := http.FileServer(http.Dir("./static"))
+		r.PathPrefix("/").Handler(http.StripPrefix("/", staticFS))
+	}
 
 	log.Println("Listening...")
-	http.ListenAndServe(
-		fmt.Sprintf(":%d", *port),
+	log.Fatal(http.ListenAndServe(
+		fmt.Sprintf(":%d", config.Port),
 		handlers.LoggingHandler(os.Stdout, r),
-	)
+	))
 }

@@ -1,0 +1,17 @@
+runtime: go112
+service: async-cookies
+
+instance_class: F1
+
+env_variables:
+  ENVIRONMENT: "production"
+
+handlers:
+        - url: /
+          static_files: static/index.html
+          upload: static/index.html
+        - url: /(.*\.(css|js))$
+          static_files: static/\1
+          upload: static/.*\.(css|js)$
+        - url: /.*
+          script: auto

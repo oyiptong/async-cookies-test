@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = 'v1';
+const CACHE_NAME = 'v0';
 const CACHED_URLS = new Set([
   '/',
   '/bootstrap.min.css',
@@ -26,12 +26,32 @@ async function cacheURLs() {
   }
 }
 
+async function getCookie() {
+  return await cookieStore.get('session');
+}
+
+async function setGetCookie() {
+  await cookieStore.set('session', 'set-by-sw');
+  return await getCookie();
+}
+
+async function executeAction(action) {
+  switch(action) {
+    case "get-cookie":
+      return await getCookie();
+    case "set-cookie":
+      return await setGetCookie();
+    case "delete-cookie":
+    return await deleteSessionCookie();
+  }
+}
+
 async function setupCookieSubscriptions() {
   if (cookieStore) {
     await cookieStore.subscribeToChanges([
       {
         name: 'session',
-        matchType: 'starts-with',
+        matchType: 'equals',
       },
     ]);
     console.log("subscribed to changes");
@@ -56,7 +76,9 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(async function() {
+    console.log("activating");
     await broadcastLogEvent('activating');
+    await self.clients.claim();
 
     let keys = await caches.keys();
     for (let key of keys) {
@@ -67,15 +89,32 @@ self.addEventListener('activate', (event) => {
   });
 });
 
-self.addEventListener('message', (event) => {
-  console.log(`SW Received message: ${event.data}`);
+self.addEventListener('message', async function(event) {
+  if (event && event.data) {
+    if (typeof(event.data) == "object") {
+      switch(event.data.type) {
+        case 'action':
+          let action = event.data.data;
+          let response = await executeAction(action);
+          event.ports[0].postMessage(response);
+          break;
+        default:
+          await broadcastLogEvent(`received unknown action ${JSON.stringify(event.data)}`);
+          event.ports[0].postMessage("unknown action");
+      }
+    } else {
+      await broadcastLogEvent(`cannot handle event: ${event.data}`);
+    }
+  }
 });
 
-self.addEventListener('cookiechange', (event) => {
+self.addEventListener('cookiechange', async function(event) {
+  console.log("SW cookie change detected.");
+  for (const cookie of event.changed) {
+    await broadcastLogEvent(`cookie changed: ${cookie.name}`);
+  }
   for (const cookie of event.deleted) {
-    if (cookie.name === 'session') {
-      broadcastLogEvent(`cookie deleted: ${cookie.name}`);
-    }
+    await broadcastLogEvent(`cookie deleted: ${cookie.name}`);
   }
 });
 
@@ -87,6 +126,30 @@ self.addEventListener('fetch', (event) => {
     return event.respondWith(async function() {
       await broadcastLogEvent(`generated response ${num}`);
       return new Response(`random int: ${num}`);
+    }());
+  } else if (/^\/sw\/get\/cookie/.test(requestURL.pathname)) {
+    return event.respondWith(async function() {
+      let cookie = await getCookie();
+      let message;
+      if (cookie) {
+        message = `GET session cookie value: ${cookie.value}`;
+      } else {
+        message = `no cookie found.`;
+      }
+      await broadcastLogEvent(`get cookie. found: ${!!cookie}`);
+      return new Response(message);
+    }());
+  } else if (/^\/sw\/set\/cookie/.test(requestURL.pathname)) {
+    return event.respondWith(async function() {
+      let cookie = await setGetCookie();
+      let message;
+      if (cookie) {
+        message = `SET session cookie value: ${cookie.value}`;
+      } else {
+        message = `no cookie found.`;
+      }
+      await broadcastLogEvent(`set cookie. found: ${!!cookie}`);
+      return new Response(message);
     }());
   } else if (/^\/sw\/delete\/cookie/.test(requestURL.pathname)) {
     return event.respondWith(async function() {
